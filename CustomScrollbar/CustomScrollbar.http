@@ -1,0 +1,6 @@
+@CustomScrollbar_HostAddress = http://localhost:5201
+
+GET {{CustomScrollbar_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
