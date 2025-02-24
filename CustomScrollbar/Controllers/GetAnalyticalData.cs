@@ -334,12 +334,11 @@ namespace CustomScrollbar.Controllers
         }
 
 
-
-
-        [HttpGet("initialize-grid")]
-        public async Task<IActionResult> InitializeGrid(int rootParentID, int rowCount, int columnCount)
+        [HttpPost("initialize-grid")]
+        public async Task<IActionResult> InitializeGrid([FromBody] InitializeGridRequest request)
         {
-            _logger.LogInformation("InitializeGrid called with rootParentID: {rootParentID}, rowCount: {rowCount}, columnCount: {columnCount}", rootParentID, rowCount, columnCount);
+            _logger.LogInformation("InitializeGrid called with rootParentID: {rootParentID}, rowCount: {rowCount}, columnCount: {columnCount}",
+                                    request.RootParentID, request.RowCount, request.ColumnCount);
 
             try
             {
@@ -353,7 +352,7 @@ namespace CustomScrollbar.Controllers
                 DataRow row1 = treeSegments.SegmentTable.NewRow();
                 row1["SegmentPosition"] = 1;
                 row1["ParentSegmentID"] = 0; // No parent for the root segment
-                row1["ParentID"] = rootParentID;
+                row1["ParentID"] = request.RootParentID;
                 row1["TreeLevel"] = 1;
                 row1["RecordCount"] = recordCountForTopLevel;
                 row1["FirstTreeRow"] = 1;
@@ -362,19 +361,25 @@ namespace CustomScrollbar.Controllers
                 row1["LastCustomSortID"] = recordCountForTopLevel;
                 treeSegments.SegmentTable.Rows.Add(row1);
 
+                int logId = 0;
+                if (!string.IsNullOrEmpty(request.Log1))
+                {
+                    logId = SaveTreeSegmentTableToDatabase("InitializeGrid", request.Log1, treeSegments.SegmentTable);
+                }
+
                 // Make the list of query requests
                 DataTable queryListTable = CreateQueryListTable();
 
                 // Make the first query request
                 DataRow row = queryListTable.NewRow();
-                row["parentId"] = rootParentID;
+                row["parentId"] = request.RootParentID;
                 row["firstRecordNumber"] = 1;
-                row["lastRecordNumber"] = rowCount;
+                row["lastRecordNumber"] = request.RowCount;
                 row["treeLevel"] = 1;
                 queryListTable.Rows.Add(row);
 
                 // Get the data for the first segment
-                DataTable result = await GetDataByTreeSegment(queryListTable, 1, columnCount);
+                DataTable result = await GetDataByTreeSegment(queryListTable, 1, request.ColumnCount, logId);
 
                 // Convert DataTable to List<Dictionary<string, object>>
                 var jsonFriendlyResult = this.DataTableToDictionaryList(result);
@@ -399,6 +404,7 @@ namespace CustomScrollbar.Controllers
         }
 
 
+
         private TreeSegments CreateTreeSegmentTable()
         {
             TreeSegments treeSegmentsInstance = HttpContext.Session.GetObject<TreeSegments>("TreeSegments");
@@ -417,10 +423,52 @@ namespace CustomScrollbar.Controllers
 
         private void SaveTreeSegmentTable(TreeSegments treeSegmentsInstance)
         {
+            // Save to session variable
             HttpContext.Session.SetObject("TreeSegments", treeSegmentsInstance);
         }
 
-        private async Task<DataTable> GetDataByTreeSegment(DataTable queryListTable, int firstColumnNumber, int lastColumnNumber)
+        private int SaveTreeSegmentTableToDatabase(string EventName, string Log1, DataTable treeSegments)
+        {
+            // Save to database
+            int logId = 0;
+            string connectionString = _configuration.GetConnectionString("DefaultConnection");
+            using (SqlConnection conn = new SqlConnection(connectionString))
+            {
+                conn.Open();
+
+                using (SqlCommand cmd = new SqlCommand("SaveSegmentTable", conn))
+                {
+                    cmd.CommandType = CommandType.StoredProcedure;
+
+                    // Define a parameter for the table-valued type
+                    SqlParameter tableParam = cmd.Parameters.AddWithValue("@SegmentTableSegment", treeSegments);
+                    tableParam.SqlDbType = SqlDbType.Structured;
+                    tableParam.TypeName = "SegmentTableType";
+
+                    SqlParameter log1Param = cmd.Parameters.AddWithValue("@log1", Log1);
+                    log1Param.SqlDbType = SqlDbType.VarChar;
+                    log1Param.Size = -1;
+
+                    SqlParameter eventName = cmd.Parameters.AddWithValue("@eventName", EventName);
+                    eventName.SqlDbType = SqlDbType.VarChar;
+                    eventName.Size =100;
+
+                    SqlParameter logIdParam = new SqlParameter("@logId", SqlDbType.Int)
+                    {
+                        Direction = ParameterDirection.Output
+                    };
+                    cmd.Parameters.Add(logIdParam);
+
+
+                    cmd.ExecuteNonQuery();
+
+                    logId = (int)logIdParam.Value;
+                }
+            }
+            return logId;
+        }
+
+        private async Task<DataTable> GetDataByTreeSegment(DataTable queryListTable, int firstColumnNumber, int lastColumnNumber, int logId = 0)
         {
 
             // Call stored procedure
@@ -440,6 +488,7 @@ namespace CustomScrollbar.Controllers
                     command.Parameters.Add(treeSegmentParam);
                     command.Parameters.Add(new SqlParameter("@firstColumnNumber", SqlDbType.Int) { Value = firstColumnNumber });
                     command.Parameters.Add(new SqlParameter("@lastColumnNumber", SqlDbType.Int) { Value = lastColumnNumber });
+                    command.Parameters.Add(new SqlParameter("@logID", SqlDbType.Int) { Value = logId });
                     using (SqlDataAdapter adapter = new SqlDataAdapter(command))
                     {
                         await connection.OpenAsync();
@@ -515,6 +564,14 @@ namespace CustomScrollbar.Controllers
     {
         public int RecordCount { get; set; }
         public List<Dictionary<string, object>> Data { get; set; }
+    }
+
+    public class InitializeGridRequest
+    {
+        public int RootParentID { get; set; }
+        public int RowCount { get; set; }
+        public int ColumnCount { get; set; }
+        public string Log1 { get; set; }
     }
 
 }
