@@ -19,14 +19,35 @@ namespace CustomScrollbar.Controllers
             _logger = logger;
         }
 
-        [HttpGet("scroll-grid")]
-        public async Task<IActionResult> ScrollGrid(int firstTreeRow, int rowCount, int firstTreeColumn, int columnCount)
+        //[HttpGet("scroll-grid")]
+        //public async Task<IActionResult> ScrollGrid(int firstTreeRow, int rowCount, int firstTreeColumn, int columnCount)
+        //{
+        [HttpPost("scroll-grid")]
+        public async Task<IActionResult> ScrollGrid([FromBody] ScrollGridRequest request)
         {
+            if (request == null)
+            {
+                return BadRequest("Invalid request payload.");
+            }
+
+            int firstTreeRow = request.FirstTreeRow;
+            int rowCount = request.RowCount;
+            int firstTreeColumn = request.FirstTreeColumn;
+            int columnCount = request.ColumnCount;
+            string log1 = request.log1;
+
+
             // Get TreeSegment table
             TreeSegments treeSegments = HttpContext.Session.GetObject<TreeSegments>("TreeSegments");
 
             // Save TreeSegment table
-            this.SaveTreeSegmentTable(treeSegments);
+            //this.SaveTreeSegmentTable(treeSegments);
+
+            int logId = 0;
+            if (!string.IsNullOrEmpty(log1))
+            {
+                logId = SaveTreeSegmentTableToDatabase("ScrollGrid", log1, treeSegments.SegmentTable);
+            }
 
             // Create queryListTable.
             DataTable queryListTable = CreateQueryListTable();
@@ -74,7 +95,7 @@ namespace CustomScrollbar.Controllers
 
 
             // Get the data for the first segment
-            DataTable result = await GetDataByTreeSegment(queryListTable, firstTreeColumn, lastTreeColumn);
+            DataTable result = await GetDataByTreeSegment(queryListTable, firstTreeColumn, lastTreeColumn, logId);
 
             // Convert DataTable to List<Dictionary<string, object>>
             var jsonFriendlyResult = this.DataTableToDictionaryList(result);
@@ -104,26 +125,6 @@ namespace CustomScrollbar.Controllers
         }
 
         */
-
-
-
-
-
-        //[HttpGet("expand-node")]
-        //public async Task<IActionResult> ExpandNode(
-        //    // the first 4 variables are used to determine what data is returned to the grid
-        //    int firstTreeRow, // first visible
-        //    int rowCount,
-        //    int firstTreeColumn, // first visible
-        //    int columnCount,
-        //    // the last 5 variables are used to modify the TreeSegments
-        //    int clickedNode_parentID, // The parentID of the clicked node
-        //    int clickedNode_ID, // The ID of the clicked node
-        //    int clickedNode_treeLevel, // The treeLevel of the clicked node
-        //    int clickedNode_childRecordCount, // The recordCount of the clicked node
-        //    int clickedNode_customSortID // The customSortID of the clicked node
-        //    )
-        //{
 
         [HttpPost("expand-node")]
         public async Task<IActionResult> ExpandNode([FromBody] ExpandNodeRequest request)
@@ -613,6 +614,15 @@ namespace CustomScrollbar.Controllers
         public int ClickedNode_TreeLevel { get; set; }
         public int ClickedNode_ChildRecordCount { get; set; }
         public int ClickedNode_CustomSortID { get; set; }
+        public string log1 { get; set; }
+    }
+
+    public class ScrollGridRequest
+    {
+        public int FirstTreeRow { get; set; }
+        public int RowCount { get; set; }
+        public int FirstTreeColumn { get; set; }
+        public int ColumnCount { get; set; }
         public string log1 { get; set; }
     }
 
