@@ -109,21 +109,43 @@ namespace CustomScrollbar.Controllers
 
 
 
-        [HttpGet("expand-node")]
-        public async Task<IActionResult> ExpandNode(
-            // the first 4 variables are used to determine what data is returned to the grid
-            int firstTreeRow, // first visible
-            int rowCount,
-            int firstTreeColumn, // first visible
-            int columnCount,
-            // the last 5 variables are used to modify the TreeSegments
-            int clickedNode_parentID, // The parentID of the clicked node
-            int clickedNode_ID, // The ID of the clicked node
-            int clickedNode_treeLevel, // The treeLevel of the clicked node
-            int clickedNode_childRecordCount, // The recordCount of the clicked node
-            int clickedNode_customSortID // The customSortID of the clicked node
-            )
+        //[HttpGet("expand-node")]
+        //public async Task<IActionResult> ExpandNode(
+        //    // the first 4 variables are used to determine what data is returned to the grid
+        //    int firstTreeRow, // first visible
+        //    int rowCount,
+        //    int firstTreeColumn, // first visible
+        //    int columnCount,
+        //    // the last 5 variables are used to modify the TreeSegments
+        //    int clickedNode_parentID, // The parentID of the clicked node
+        //    int clickedNode_ID, // The ID of the clicked node
+        //    int clickedNode_treeLevel, // The treeLevel of the clicked node
+        //    int clickedNode_childRecordCount, // The recordCount of the clicked node
+        //    int clickedNode_customSortID // The customSortID of the clicked node
+        //    )
+        //{
+
+        [HttpPost("expand-node")]
+        public async Task<IActionResult> ExpandNode([FromBody] ExpandNodeRequest request)
         {
+            if (request == null)
+            {
+                return BadRequest("Invalid request payload.");
+            }
+
+            // Extract parameters from request object
+            int firstTreeRow = request.FirstTreeRow;
+            int rowCount = request.RowCount;
+            int firstTreeColumn = request.FirstTreeColumn;
+            int columnCount = request.ColumnCount;
+            int clickedNode_parentID = request.ClickedNode_ParentID;
+            int clickedNode_ID = request.ClickedNode_ID;
+            int clickedNode_treeLevel = request.ClickedNode_TreeLevel;
+            int clickedNode_childRecordCount = request.ClickedNode_ChildRecordCount;
+            int clickedNode_customSortID = request.ClickedNode_CustomSortID;
+            string Log1 = request.log1.ToString();
+
+
             // Get TreeSegment table
             TreeSegments treeSegments = HttpContext.Session.GetObject<TreeSegments>("TreeSegments");
 
@@ -278,6 +300,12 @@ namespace CustomScrollbar.Controllers
             // Save TreeSegment table
             this.SaveTreeSegmentTable(treeSegments);
 
+            int logId = 0;
+            if (!string.IsNullOrEmpty(Log1))
+            {
+                logId = SaveTreeSegmentTableToDatabase("ExpandNode", Log1, treeSegments.SegmentTable);
+            }
+
             // Create queryListTable.
             DataTable queryListTable = CreateQueryListTable();
 
@@ -323,7 +351,7 @@ namespace CustomScrollbar.Controllers
             }
 
             // Call GetDataByTreeSegment
-            DataTable result = await GetDataByTreeSegment(queryListTable, firstTreeColumn, lastTreeColumn);
+            DataTable result = await GetDataByTreeSegment(queryListTable, firstTreeColumn, lastTreeColumn, logId);
 
             // Convert DataTable to List<Dictionary<string, object>>
             var jsonFriendlyResult = this.DataTableToDictionaryList(result);
@@ -572,6 +600,20 @@ namespace CustomScrollbar.Controllers
         public int RowCount { get; set; }
         public int ColumnCount { get; set; }
         public string Log1 { get; set; }
+    }
+
+    public class ExpandNodeRequest
+    {
+        public int FirstTreeRow { get; set; }
+        public int RowCount { get; set; }
+        public int FirstTreeColumn { get; set; }
+        public int ColumnCount { get; set; }
+        public int ClickedNode_ParentID { get; set; }
+        public int ClickedNode_ID { get; set; }
+        public int ClickedNode_TreeLevel { get; set; }
+        public int ClickedNode_ChildRecordCount { get; set; }
+        public int ClickedNode_CustomSortID { get; set; }
+        public string log1 { get; set; }
     }
 
 }
