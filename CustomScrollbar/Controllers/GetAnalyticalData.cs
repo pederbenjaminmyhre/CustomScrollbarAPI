@@ -19,9 +19,6 @@ namespace CustomScrollbar.Controllers
             _logger = logger;
         }
 
-        //[HttpGet("scroll-grid")]
-        //public async Task<IActionResult> ScrollGrid(int firstTreeRow, int rowCount, int firstTreeColumn, int columnCount)
-        //{
         [HttpPost("scroll-grid")]
         public async Task<IActionResult> ScrollGrid([FromBody] ScrollGridRequest request)
         {
@@ -36,13 +33,10 @@ namespace CustomScrollbar.Controllers
             int columnCount = request.ColumnCount;
             string log1 = request.log1;
 
-
             // Get TreeSegment table
             TreeSegments treeSegments = HttpContext.Session.GetObject<TreeSegments>("TreeSegments");
 
             // Save TreeSegment table
-            //this.SaveTreeSegmentTable(treeSegments);
-
             int logId = 0;
             if (!string.IsNullOrEmpty(log1))
             {
@@ -55,44 +49,50 @@ namespace CustomScrollbar.Controllers
             // Make the list of query requests.
             int lastTreeRow = firstTreeRow + rowCount - 1;
             int lastTreeColumn = firstTreeColumn + columnCount - 1;
-            foreach (DataRow segment in treeSegments.SegmentTable.Rows)
+            IEnumerable<DataRow> filteredSegments = treeSegments.SegmentTable.AsEnumerable()
+                .Where(segment => 
+                    (int)segment["LastTreeRow"] >= firstTreeRow 
+                    &&
+                    (int)segment["FirstTreeRow"] <= lastTreeRow)
+                .OrderBy(segment => (int)segment["SegmentPosition"]); // Sorting in ascending order
+
+            DataRow? firstRow = filteredSegments.FirstOrDefault();
+            DataRow? lastRow = filteredSegments.LastOrDefault();
+
+            foreach (DataRow segment in filteredSegments)
             {
-                if ((int)segment["LastTreeRow"] >= firstTreeRow && (int)segment["FirstTreeRow"] <= lastTreeRow)
+                int firstCustomSortID = 0; 
+                int lastCustomSortID = 0;
+                if (segment == firstRow)
                 {
-                    DataRow row = queryListTable.NewRow();
-                    row["parentId"] = (int)segment["ParentID"];
-
-                    // offset for first query request
-                    if ((int)segment["FirstTreeRow"] <= firstTreeRow && firstTreeRow <= (int)segment["LastTreeRow"])
-                    {
-                        int segment_FirstCustomSortID = (int)segment["FirstCustomSortID"];
-                        int segment_FirstTreeRow = (int)segment["FirstTreeRow"];
-                        int offset = segment_FirstCustomSortID - segment_FirstTreeRow;
-                        row["firstRecordNumber"] = firstTreeRow - offset;
-                    }
-                    else
-                    {
-                        row["firstRecordNumber"] = (int)segment["FirstCustomSortID"];
-                    }
-
-                    // offset for last query request
-                    if ((int)segment["FirstTreeRow"] <= lastTreeRow && lastTreeRow <= (int)segment["LastTreeRow"])
-                    {
-                        int segment_FirstCustomSortID = (int)segment["FirstCustomSortID"];
-                        int segment_FirstTreeRow = (int)segment["FirstTreeRow"];
-                        int offset = segment_FirstCustomSortID - segment_FirstTreeRow;
-                        row["lastRecordNumber"] = lastTreeRow - ((-1) * offset);
-                    }
-                    else
-                    {
-                        row["lastRecordNumber"] = (int)segment["LastCustomSortID"];
-                    }
-
-                    row["treeLevel"] = (int)segment["TreeLevel"];
-                    queryListTable.Rows.Add(row);
+                    // Logic for the first row
+                    int segmentOffset = (int)segment["FirstTreeRow"] - (int)segment["FirstCustomSortID"];
+                    firstCustomSortID = firstTreeRow - segmentOffset;
                 }
-            }
+                else
+                {
+                    firstCustomSortID = (int)segment["FirstCustomSortID"];
+                }
 
+                if (segment == lastRow)
+                {
+                    // Logic for the last row
+                    int segmentOffset = (int)segment["FirstTreeRow"] - (int)segment["FirstCustomSortID"];
+                    lastCustomSortID = lastTreeRow - segmentOffset;
+                }
+                else
+                {
+                    lastCustomSortID = (int)segment["LastCustomSortID"];
+                }
+
+                // General logic for all rows
+                DataRow row = queryListTable.NewRow();
+                row["parentId"] = (int)segment["ParentID"];
+                row["firstRecordNumber"] = firstCustomSortID;
+                row["lastRecordNumber"] = lastCustomSortID;
+                row["treeLevel"] = (int)segment["TreeLevel"];
+                queryListTable.Rows.Add(row);
+            }
 
             // Get the data for the first segment
             DataTable result = await GetDataByTreeSegment(queryListTable, firstTreeColumn, lastTreeColumn, logId);
@@ -102,8 +102,6 @@ namespace CustomScrollbar.Controllers
 
             return Ok(jsonFriendlyResult);
         }
-
-
 
         [HttpPost("contract-node")]
         public async Task<IActionResult> ContractNode([FromBody] ExpandNodeRequest request)
@@ -155,11 +153,15 @@ namespace CustomScrollbar.Controllers
             int clickedNodeIndex = treeSegments.SegmentTable.Rows.IndexOf(parentRecord);
 
             bool treeLevelIsGreater = true;
+            int virtualTreeRecordsDeleted = 0;
+            int segmentsDeleted = 0;
+
             // while treeLevelIsGreater
             while (treeLevelIsGreater) {
 
-                // Get the record for clickedNodeIndex + 1
-                DataRow? nextRecord = treeSegments.SegmentTable.Rows[clickedNodeIndex + 1];
+                // ***TRICKY***
+                // Records keep getting deleted, so clickedNodeIndex + 1 represents a new record as long as the loop runs
+                DataRow? nextRecord = treeSegments.SegmentTable.Rows[clickedNodeIndex + 1]; // <-- TRICKY
 
                 /* If the nextRecord's treeLevel is greater than the clickedNode_treeLevel, then delete it.
                  If the nextRecord's treeLevel is the same level as the clickedNode_treeLevel, 
@@ -167,33 +169,45 @@ namespace CustomScrollbar.Controllers
                 if (nextRecord != null) { 
                     if(nextRecord.Field<int>("TreeLevel") > clickedNode_treeLevel)
                     {
-                        nextRecord.Delete();
+                        // Update totalRecordCount
+                        int newTotalRecordCount = treeSegments.totalRecordCount - nextRecord.Field<int>("RecordCount");
+                        virtualTreeRecordsDeleted += nextRecord.Field<int>("RecordCount");
+                        treeSegments.totalRecordCount = newTotalRecordCount;
+                        // Delete nextRecord
+                        nextRecord.Delete(); segmentsDeleted++;
                     }
                     else if(nextRecord.Field<int>("TreeLevel") == clickedNode_treeLevel)
                     {
                         // Merge nextRecord with parentRecord
                         parentRecord.SetField("RecordCount", parentRecord.Field<int>("RecordCount") + nextRecord.Field<int>("RecordCount"));
-                        parentRecord.SetField("LastTreeRow", nextRecord.Field<int>("LastTreeRow"));
+                        parentRecord.SetField("LastTreeRow", nextRecord.Field<int>("LastTreeRow") - virtualTreeRecordsDeleted);
                         parentRecord.SetField("LastCustomSortID", nextRecord.Field<int>("LastCustomSortID"));
-                        nextRecord.Delete();
+                        nextRecord.Delete(); segmentsDeleted++;
+                        treeLevelIsGreater = false;
+                    }
+                    else
+                    {
                         treeLevelIsGreater = false;
                     }
                 }
-
-                // End Loop
             }
 
             // Update TreeRows in all subsequent records
             for (int i = clickedNodeIndex + 1; i < treeSegments.SegmentTable.Rows.Count; i++)
             {
                 DataRow row = treeSegments.SegmentTable.Rows[i];
-                row["SegmentPosition"] = row.Field<int>("SegmentPosition") - 1;
-                row["FirstTreeRow"] = row.Field<int>("FirstTreeRow") - clickedNode_childRecordCount;
-                row["LastTreeRow"] = row.Field<int>("LastTreeRow") - clickedNode_childRecordCount;
+                row["SegmentPosition"] = row.Field<int>("SegmentPosition") - segmentsDeleted;
+                row["FirstTreeRow"] = row.Field<int>("FirstTreeRow") - virtualTreeRecordsDeleted;
+                row["LastTreeRow"] = row.Field<int>("LastTreeRow") - virtualTreeRecordsDeleted;
             }
 
             // Save TreeSegment table
             this.SaveTreeSegmentTable(treeSegments);
+
+            // Log the record Count
+            Log1 += "\r\n";
+            Log1 += "C# in web method ContractNode()\"\r\n";
+            Log1 += "treeSegments.totalRecordCount: " + treeSegments.totalRecordCount.ToString() + "\r\n";
 
             // Save TreeSegment table to database
             int logId = 0;
@@ -209,39 +223,49 @@ namespace CustomScrollbar.Controllers
             int lastTreeRow = firstTreeRow + rowCount - 1;
             int lastTreeColumn = firstTreeColumn + columnCount - 1;
 
-            foreach (DataRow segment in treeSegments.SegmentTable.Rows)
+            IEnumerable<DataRow> filteredSegments = treeSegments.SegmentTable.AsEnumerable()
+                .Where(segment =>
+                    (int)segment["LastTreeRow"] >= firstTreeRow
+                    &&
+                    (int)segment["FirstTreeRow"] <= lastTreeRow)
+                    .OrderBy(segment => (int)segment["SegmentPosition"]); // Sorting in ascending order
+
+            DataRow? firstRow = filteredSegments.FirstOrDefault();
+            DataRow? lastRow = filteredSegments.LastOrDefault();
+
+            foreach (DataRow segment in filteredSegments)
             {
-                if ((int)segment["LastTreeRow"] >= firstTreeRow && (int)segment["FirstTreeRow"] <= lastTreeRow)
+                int firstCustomSortID = 0;
+                int lastCustomSortID = 0;
+                if (segment == firstRow)
                 {
-                    DataRow row = queryListTable.NewRow();
-                    row["parentId"] = (int)segment["ParentID"];
-                    // offset for first query request
-                    if ((int)segment["FirstTreeRow"] <= firstTreeRow && firstTreeRow <= (int)segment["LastTreeRow"])
-                    {
-                        int segment_FirstCustomSortID = (int)segment["FirstCustomSortID"];
-                        int segment_FirstTreeRow = (int)segment["FirstTreeRow"];
-                        int offset = segment_FirstCustomSortID - segment_FirstTreeRow;
-                        row["firstRecordNumber"] = firstTreeRow - offset;
-                    }
-                    else
-                    {
-                        row["firstRecordNumber"] = (int)segment["FirstCustomSortID"];
-                    }
-                    // offset for last query request
-                    if ((int)segment["FirstTreeRow"] <= lastTreeRow && lastTreeRow <= (int)segment["LastTreeRow"])
-                    {
-                        int segment_FirstCustomSortID = (int)segment["FirstCustomSortID"];
-                        int segment_FirstTreeRow = (int)segment["FirstTreeRow"];
-                        int offset = segment_FirstCustomSortID - segment_FirstTreeRow;
-                        row["lastRecordNumber"] = lastTreeRow - ((-1) * offset);
-                    }
-                    else
-                    {
-                        row["lastRecordNumber"] = (int)segment["LastCustomSortID"];
-                    }
-                    row["treeLevel"] = (int)segment["TreeLevel"];
-                    queryListTable.Rows.Add(row);
+                    // Logic for the first row
+                    int segmentOffset = (int)segment["FirstTreeRow"] - (int)segment["FirstCustomSortID"];
+                    firstCustomSortID = firstTreeRow - segmentOffset;
                 }
+                else
+                {
+                    firstCustomSortID = (int)segment["FirstCustomSortID"];
+                }
+
+                if (segment == lastRow)
+                {
+                    // Logic for the last row
+                    int segmentOffset = (int)segment["FirstTreeRow"] - (int)segment["FirstCustomSortID"];
+                    lastCustomSortID = lastTreeRow - segmentOffset;
+                }
+                else
+                {
+                    lastCustomSortID = (int)segment["LastCustomSortID"];
+                }
+
+                // General logic for all rows
+                DataRow row = queryListTable.NewRow();
+                row["parentId"] = (int)segment["ParentID"];
+                row["firstRecordNumber"] = firstCustomSortID;
+                row["lastRecordNumber"] = lastCustomSortID;
+                row["treeLevel"] = (int)segment["TreeLevel"];
+                queryListTable.Rows.Add(row);
             }
 
             // Call GetDataByTreeSegment
@@ -250,7 +274,14 @@ namespace CustomScrollbar.Controllers
             // Convert DataTable to List<Dictionary<string, object>>
             var jsonFriendlyResult = this.DataTableToDictionaryList(result);
 
-            return Ok(jsonFriendlyResult);
+            // Return both the record count and data
+            var response = new InitializeGridResponse
+            {
+                RecordCount = treeSegments.totalRecordCount,
+                Data = jsonFriendlyResult
+            };
+
+            return Ok(response);
         }
 
 
@@ -308,7 +339,7 @@ namespace CustomScrollbar.Controllers
             // If SplitIsNeeded, calculate changes to "Parent TreeSegment"
             int p2_segmentID = 0, p2_parentSegmentID = 0, p2_segmentPosition = 0, p2_parentID = 0, p2_treeLevel = 0, p2_recordCount = 0;
             int p2_firstTreeRow = 0, p2_lastTreeRow = 0, p2_firstCustomSortID = 0, p2_lastCustomSortID = 0;
-            if(SplitIsNeeded) { 
+            //if(SplitIsNeeded) { 
                 p2_segmentID = p1_segmentID; // no change
                 p2_parentSegmentID = p1_parentSegmentID; // no change
                 p2_segmentPosition = p1_segmentPosition; // no change
@@ -319,7 +350,7 @@ namespace CustomScrollbar.Controllers
                 p2_lastTreeRow = p1_firstTreeRow + p2_recordCount - 1;
                 p2_firstCustomSortID = p1_firstCustomSortID; // no change
                 p2_lastCustomSortID = p1_firstCustomSortID + p2_recordCount - 1;
-            }
+            //}
 
             // Make record for "Inserted TreeSegment"
             int i_segmentID = 0, i_parentSegmentID = 0, i_segmentPosition = 0, i_parentID = 0, i_treeLevel = 0, i_recordCount = 0;
@@ -427,8 +458,23 @@ namespace CustomScrollbar.Controllers
                 }
             }
 
+            // Log the current totalRecordCount before update
+            _logger.LogInformation("Before update in ExpandNode, totalRecordCount: {totalRecordCount}", treeSegments.totalRecordCount);
+
+            // Update totalRecordCount
+            int newTotalRecordCount = treeSegments.totalRecordCount + clickedNode_childRecordCount;
+            treeSegments.totalRecordCount = newTotalRecordCount;
+
+            // Log the updated totalRecordCount
+            _logger.LogInformation("After update in ExpandNode, totalRecordCount: {totalRecordCount}", treeSegments.totalRecordCount);
+
             // Save TreeSegment table
             this.SaveTreeSegmentTable(treeSegments);
+
+            // Log the record Count
+            Log1 += "\r\n";
+            Log1 += "C# in web method ExpandNode()\"\r\n";
+            Log1 += "treeSegments.totalRecordCount: " + treeSegments.totalRecordCount.ToString() + "\r\n";
 
             int logId = 0;
             if (!string.IsNullOrEmpty(Log1))
@@ -442,42 +488,50 @@ namespace CustomScrollbar.Controllers
             // Make the list of query requests.
             int lastTreeRow = firstTreeRow + rowCount - 1;
             int lastTreeColumn = firstTreeColumn + columnCount - 1;
-            foreach (DataRow segment in treeSegments.SegmentTable.Rows)
+
+            IEnumerable<DataRow> filteredSegments = treeSegments.SegmentTable.AsEnumerable()
+                .Where(segment =>
+                    (int)segment["LastTreeRow"] >= firstTreeRow
+                    &&
+                    (int)segment["FirstTreeRow"] <= lastTreeRow)
+                .OrderBy(segment => (int)segment["SegmentPosition"]); // Sorting in ascending order
+
+            DataRow? firstRow = filteredSegments.FirstOrDefault();
+            DataRow? lastRow = filteredSegments.LastOrDefault();
+
+            foreach (DataRow segment in filteredSegments)
             {
-                if ((int)segment["LastTreeRow"] >= firstTreeRow && (int)segment["FirstTreeRow"] <= lastTreeRow)
+                int firstCustomSortID = 0;
+                int lastCustomSortID = 0;
+                if (segment == firstRow)
                 {
-                    DataRow row = queryListTable.NewRow();
-                    row["parentId"] = (int)segment["ParentID"];
-
-                    // offset for first query request
-                    if ((int)segment["FirstTreeRow"] <= firstTreeRow && firstTreeRow <= (int)segment["LastTreeRow"])
-                    {
-                        int segment_FirstCustomSortID = (int)segment["FirstCustomSortID"];
-                        int segment_FirstTreeRow = (int)segment["FirstTreeRow"];
-                        int offset = segment_FirstCustomSortID - segment_FirstTreeRow;
-                        row["firstRecordNumber"] = firstTreeRow - offset;
-                    }
-                    else
-                    {
-                        row["firstRecordNumber"] = (int)segment["FirstCustomSortID"];
-                    }
-
-                    // offset for last query request
-                    if ((int)segment["FirstTreeRow"] <= lastTreeRow && lastTreeRow <= (int)segment["LastTreeRow"])
-                    {
-                        int segment_FirstCustomSortID = (int)segment["FirstCustomSortID"];
-                        int segment_FirstTreeRow = (int)segment["FirstTreeRow"];
-                        int offset = segment_FirstCustomSortID - segment_FirstTreeRow;
-                        row["lastRecordNumber"] = lastTreeRow - ((-1)*offset);
-                    }
-                    else
-                    {
-                        row["lastRecordNumber"] = (int)segment["LastCustomSortID"];
-                    }
-
-                    row["treeLevel"] = (int)segment["TreeLevel"];
-                    queryListTable.Rows.Add(row);
+                    // Logic for the first row
+                    int segmentOffset = (int)segment["FirstTreeRow"] - (int)segment["FirstCustomSortID"];
+                    firstCustomSortID = firstTreeRow - segmentOffset;
                 }
+                else
+                {
+                    firstCustomSortID = (int)segment["FirstCustomSortID"];
+                }
+
+                if (segment == lastRow)
+                {
+                    // Logic for the last row
+                    int segmentOffset = (int)segment["FirstTreeRow"] - (int)segment["FirstCustomSortID"];
+                    lastCustomSortID = lastTreeRow - segmentOffset;
+                }
+                else
+                {
+                    lastCustomSortID = (int)segment["LastCustomSortID"];
+                }
+
+                // General logic for all rows
+                DataRow row = queryListTable.NewRow();
+                row["parentId"] = (int)segment["ParentID"];
+                row["firstRecordNumber"] = firstCustomSortID;
+                row["lastRecordNumber"] = lastCustomSortID;
+                row["treeLevel"] = (int)segment["TreeLevel"];
+                queryListTable.Rows.Add(row);
             }
 
             // Call GetDataByTreeSegment
@@ -486,9 +540,14 @@ namespace CustomScrollbar.Controllers
             // Convert DataTable to List<Dictionary<string, object>>
             var jsonFriendlyResult = this.DataTableToDictionaryList(result);
 
-            // return Ok(jsonFriendlyResult);
-            return Ok(jsonFriendlyResult);
+            // Return both the record count and data
+            var response = new InitializeGridResponse
+            {
+                RecordCount = treeSegments.totalRecordCount,
+                Data = jsonFriendlyResult
+            };
 
+            return Ok(response);
         }
 
 
@@ -519,10 +578,18 @@ namespace CustomScrollbar.Controllers
                 row1["LastCustomSortID"] = recordCountForTopLevel;
                 treeSegments.SegmentTable.Rows.Add(row1);
 
+                treeSegments.topLevelRecordCount = recordCountForTopLevel;
+
+                // Log the record Count
+                string Log1 = request.Log1;
+                Log1 += "\r\n";
+                Log1 += "C# in web method InitializeGridRequest()\"\r\n";
+                Log1 += "treeSegments.totalRecordCount: " + treeSegments.totalRecordCount.ToString() + "\r\n";
+
                 int logId = 0;
                 if (!string.IsNullOrEmpty(request.Log1))
                 {
-                    logId = SaveTreeSegmentTableToDatabase("InitializeGrid", request.Log1, treeSegments.SegmentTable);
+                    logId = SaveTreeSegmentTableToDatabase("InitializeGrid", Log1, treeSegments.SegmentTable);
                 }
 
                 // Make the list of query requests
@@ -548,8 +615,7 @@ namespace CustomScrollbar.Controllers
                     RecordCount = recordCountForTopLevel,
                     Data = jsonFriendlyResult
                 };
-
-                treeSegments.topLevelRecordCount = recordCountForTopLevel;
+                
                 this.SaveTreeSegmentTable(treeSegments);
 
                 return Ok(response);
@@ -560,8 +626,6 @@ namespace CustomScrollbar.Controllers
                 return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
             }
         }
-
-
 
         private TreeSegments CreateTreeSegmentTable()
         {
@@ -581,8 +645,14 @@ namespace CustomScrollbar.Controllers
 
         private void SaveTreeSegmentTable(TreeSegments treeSegmentsInstance)
         {
+            // Log the current totalRecordCount before saving
+            _logger.LogInformation("Saving TreeSegments to session with totalRecordCount: {totalRecordCount}", treeSegmentsInstance.totalRecordCount);
+
             // Save to session variable
             HttpContext.Session.SetObject("TreeSegments", treeSegmentsInstance);
+
+            // Log after saving to confirm
+            _logger.LogInformation("TreeSegments saved to session.");
         }
 
         private int SaveTreeSegmentTableToDatabase(string EventName, string Log1, DataTable treeSegments)
@@ -617,7 +687,6 @@ namespace CustomScrollbar.Controllers
                     };
                     cmd.Parameters.Add(logIdParam);
 
-
                     cmd.ExecuteNonQuery();
 
                     logId = (int)logIdParam.Value;
@@ -628,7 +697,6 @@ namespace CustomScrollbar.Controllers
 
         private async Task<DataTable> GetDataByTreeSegment(DataTable queryListTable, int firstColumnNumber, int lastColumnNumber, int logId = 0)
         {
-
             // Call stored procedure
             DataTable returnDataTable = new DataTable();
             string storedProcedureName = "dbo.GetDataByTreeSegment";
@@ -705,7 +773,6 @@ namespace CustomScrollbar.Controllers
                 }
                 list.Add(dict);
             }
-
             return list;
         }
     }

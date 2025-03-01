@@ -30,6 +30,22 @@ namespace CustomScrollbar.Models
             SegmentTable.Rows.Add(null, parentSegmentID, segmentPosition, parentId, treeLevel, recordCount, firstTreeRow, lastTreeRow, firstCustomSortID, lastCustomSortID);
         }
 
-        public int topLevelRecordCount;
+        private int _topLevelRecordCount;
+        public int topLevelRecordCount
+        {
+            get => _topLevelRecordCount;
+            set
+            {
+                _topLevelRecordCount = value;
+                _totalRecordCount = value;
+            }
+        }
+
+        private int _totalRecordCount;
+        public int totalRecordCount
+        {
+            get => _totalRecordCount;
+            set => _totalRecordCount = value;
+        }
     }
 }
